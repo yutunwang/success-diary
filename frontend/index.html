@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#10b981">
+<meta name="description" content="成功日记 - 记录你的成功经验，分享最佳实践，互相学习成长">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='32' fill='%2310b981'/%3E%3Ctext x='96' y='130' font-size='110' text-anchor='middle' fill='white'%3E⭐%3C/text%3E%3C/svg%3E">
+<title>成功日记</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="header-inner">
+    <div class="header-title">⭐ 成功日记</div>
+    <div class="header-stats" id="headerStats">
+      <span>📝 <span id="totalPosts">-</span></span>
+      <span>❤️ <span id="totalLikes">-</span></span>
+      <span>💬 <span id="totalComments">-</span></span>
+    </div>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="searchInput" placeholder="🔍 搜索成功经验、最佳实践..." />
+  </div>
+  <div class="tags-row" id="tagsRow">
+    <div class="tag-pill active" data-tag="">全部</div>
+  </div>
+</header>
+
+<!-- Tabs -->
+<div class="tabs">
+  <div class="tab active" data-sort="latest">📋 最新</div>
+  <div class="tab" data-sort="hot">🔥 热门</div>
+  <div class="tab" data-sort="most_liked">❤️ 最多赞</div>
+</div>
+
+<!-- Main View -->
+<div class="container" id="mainView">
+  <div class="loading" id="loadingIndicator">
+    <div class="spinner"></div>
+    <div>加载中...</div>
+  </div>
+  <div id="postList"></div>
+  <div class="loading" id="loadMoreIndicator" style="display:none;">
+    <div class="spinner"></div>
+    <div>加载更多...</div>
+  </div>
+</div>
+
+<!-- Detail View (hidden by default) -->
+<div class="detail-view" id="detailView" style="display:none;"></div>
+
+<!-- Empty State -->
+<div class="empty-state" id="emptyState" style="display:none;">
+  <div class="icon">📝</div>
+  <div class="text">还没有成功经验<br>成为第一个分享者吧！</div>
+  <br>
+  <button class="btn btn-primary" onclick="openCreateModal()">写第一条成功日记</button>
+</div>
+
+<!-- FAB -->
+<button class="fab" id="fabBtn" onclick="openCreateModal()" aria-label="发布新经验">✏️</button>
+
+<!-- Create Modal -->
+<div class="modal-overlay" id="createModal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">✍️ 记录你的成功经验</div>
+      <button class="modal-close" onclick="closeCreateModal()">✕</button>
+    </div>
+    <div class="form-group">
+      <label>标题 *</label>
+      <input type="text" id="postTitle" placeholder="用一句话总结你的成功经验" maxlength="100" />
+    </div>
+    <div class="form-group">
+      <label>内容 *</label>
+      <textarea id="postContent" placeholder="详细描述你的经验、方法、心路历程..." maxlength="10000"></textarea>
+    </div>
+    <div class="form-group">
+      <label>标签（逗号分隔，如：学习方法,工作效率,时间管理）</label>
+      <input type="text" id="postTags" placeholder="例如：沟通技巧,项目管理,自我提升" />
+    </div>
+    <button class="btn btn-primary" id="submitPostBtn" onclick="submitPost()" style="width:100%">
+      ✨ 发布成功经验
+    </button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toastContainer"></div>
+
+<script>
+// ============ Config ============
+const API_BASE = window.location.origin;
+let currentSort = 'latest';
+let currentSearch = '';
+let currentTag = '';
+let currentPage = 1;
+let hasMore = true;
+let isLoading = false;
+let allPosts = [];
+let currentPostId = null;
+
+// ============ API Calls ============
+async function api(path, options = {}) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      ...options,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '请求失败' }));
+      throw new Error(err.error || '请求失败');
+    }
+    return await res.json();
+  } catch (e) {
+    showToast(e.message, 'error');
+    throw e;
+  }
+}
+
+// ============ Toast ============
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ============ Stats ============
+async function loadStats() {
+  try {
+    const stats = await api('/api/stats');
+    document.getElementById('totalPosts').textContent = stats.total_posts;
+    document.getElementById('totalLikes').textContent = stats.total_likes;
+    document.getElementById('totalComments').textContent = stats.total_comments;
+  } catch {}
+}
+
+// ============ Tags ============
+async function loadTags() {
+  try {
+    const tags = await api('/api/tags/popular');
+    const row = document.getElementById('tagsRow');
+    // Keep the "全部" pill, remove others
+    row.innerHTML = '<div class="tag-pill active" data-tag="">全部</div>';
+    tags.forEach(t => {
+      const pill = document.createElement('div');
+      pill.className = 'tag-pill';
+      pill.dataset.tag = t.name;
+      pill.textContent = `${t.name} (${t.count})`;
+      pill.onclick = () => selectTag(t.name);
+      row.appendChild(pill);
+    });
+  } catch {}
+}
+
+function selectTag(tag) {
+  document.querySelectorAll('.tag-pill').forEach(p => p.classList.remove('active'));
+  const pill = document.querySelector(`.tag-pill[data-tag="${tag}"]`);
+  if (pill) pill.classList.add('active');
+  currentTag = tag;
+  currentPage = 1;
+  hasMore = true;
+  loadPosts(true);
+}
+
+// ============ Posts ============
+async function loadPosts(refresh = false) {
+  if (isLoading) return;
+  if (refresh) {
+    currentPage = 1;
+    hasMore = true;
+    document.getElementById('postList').innerHTML = '';
+  }
+  if (!hasMore) return;
+
+  isLoading = true;
+  if (refresh) {
+    document.getElementById('loadingIndicator').style.display = 'block';
+  } else {
+    document.getElementById('loadMoreIndicator').style.display = 'block';
+  }
+
+  try {
+    const params = new URLSearchParams({
+      sort: currentSort,
+      page: currentPage,
+    });
+    if (currentSearch) params.set('search', currentSearch);
+    if (currentTag) params.set('tag', currentTag);
+
+    const data = await api(`/api/posts?${params}`);
+    const list = document.getElementById('postList');
+
+    if (refresh) {
+      list.innerHTML = '';
+      allPosts = [];
+    }
+
+    if (data.posts.length === 0 && currentPage === 1) {
+      document.getElementById('emptyState').style.display = 'block';
+      document.getElementById('loadingIndicator').style.display = 'none';
+      document.getElementById('loadMoreIndicator').style.display = 'none';
+      isLoading = false;
+      return;
+    }
+
+    document.getElementById('emptyState').style.display = 'none';
+    allPosts = [...allPosts, ...data.posts];
+    data.posts.forEach(p => list.appendChild(createPostCard(p)));
+
+    hasMore = currentPage < data.pages;
+    currentPage++;
+  } catch {
+    showToast('加载失败，请重试', 'error');
+  }
+
+  document.getElementById('loadingIndicator').style.display = 'none';
+  document.getElementById('loadMoreIndicator').style.display = 'none';
+  isLoading = false;
+}
+
+function createPostCard(post) {
+  const card = document.createElement('div');
+  card.className = 'post-card';
+  card.onclick = () => showPostDetail(post.id);
+
+  const tagsHtml = post.tags_list && post.tags_list.length
+    ? `<div class="post-tags">${post.tags_list.map(t => `<span class="post-tag">${t}</span>`).join('')}</div>`
+    : '';
+
+  const timeAgo = getTimeAgo(post.created_at);
+
+  card.innerHTML = `
+    <div class="post-card-header">
+      <div class="post-title">${escapeHtml(post.title)}</div>
+    </div>
+    ${tagsHtml}
+    <div class="post-content-preview">${escapeHtml(post.content)}</div>
+    <div class="post-meta">
+      <span class="author">👤 ${escapeHtml(post.author_nickname)}</span>
+      <span class="likes">❤️ ${post.likes_count}</span>
+      <span class="comments">💬 ${post.comments_count}</span>
+      <span class="views">👁️ ${post.views_count}</span>
+      <span>${timeAgo}</span>
+    </div>
+  `;
+  return card;
+}
+
+// ============ Post Detail ============
+async function showPostDetail(postId) {
+  currentPostId = postId;
+  document.getElementById('mainView').style.display = 'none';
+  document.getElementById('detailView').style.display = 'block';
+  document.getElementById('fabBtn').style.display = 'none';
+
+  const view = document.getElementById('detailView');
+  view.innerHTML = '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+
+  // Record view
+  api(`/api/posts/${postId}/view`, { method: 'POST' }).catch(() => {});
+
+  try {
+    const post = await api(`/api/posts/${postId}`);
+    const comments = await api(`/api/posts/${postId}/comments`);
+
+    const tagsHtml = post.tags_list && post.tags_list.length
+      ? `<div class="post-tags">${post.tags_list.map(t => `<span class="post-tag">${t}</span>`).join('')}</div>`
+      : '';
+
+    const commentsHtml = comments.length
+      ? comments.map(c => `
+        <div class="comment-item">
+          <div class="comment-author">👤 ${escapeHtml(c.author_nickname)}</div>
+          <div class="comment-content">${escapeHtml(c.content)}</div>
+          <div class="comment-time">${getTimeAgo(c.created_at)}</div>
+        </div>
+      `).join('')
+      : '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:13px;">还没有评论，来抢沙发吧 🛋️</div>';
+
+    view.innerHTML = `
+      <div class="detail-back" onclick="backToList()">← 返回列表</div>
+      <div class="detail-title">${escapeHtml(post.title)}</div>
+      ${tagsHtml}
+      <div class="detail-content">${escapeHtml(post.content_full || post.content)}</div>
+      <div class="detail-meta">
+        <span class="author">👤 ${escapeHtml(post.author_nickname)}</span>
+        <span>${getTimeAgo(post.created_at)}</span>
+      </div>
+      <div class="detail-actions">
+        <button class="action-btn" id="likeBtn" onclick="likePost(${post.id})">
+          ❤️ <span id="likeCount">${post.likes_count}</span>
+        </button>
+        <span class="action-btn" style="cursor:default">
+          👁️ ${post.views_count + 1}
+        </span>
+      </div>
+      <div class="comments-section">
+        <div class="comments-title">💬 评论（${comments.length}）</div>
+        <div id="commentsList">
+          ${commentsHtml}
+        </div>
+        <div class="comment-form">
+          <input type="text" id="commentInput" placeholder="写下你的想法..." maxlength="1000" />
+          <button onclick="submitComment(${post.id})">发送</button>
+        </div>
+      </div>
+    `;
+  } catch {
+    showToast('加载失败', 'error');
+  }
+}
+
+async function likePost(postId) {
+  try {
+    const data = await api(`/api/posts/${postId}/like`, { method: 'POST' });
+    document.getElementById('likeCount').textContent = data.likes_count;
+    document.getElementById('likeBtn').classList.add('liked');
+  } catch {}
+}
+
+async function submitComment(postId) {
+  const input = document.getElementById('commentInput');
+  const content = input.value.trim();
+  if (!content) return;
+
+  const btn = input.nextElementSibling;
+  btn.disabled = true;
+  try {
+    const comment = await api(`/api/posts/${postId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+    const list = document.getElementById('commentsList');
+    const emptyMsg = list.querySelector('div[style*="text-align:center"]');
+    if (emptyMsg) list.innerHTML = '';
+
+    const item = document.createElement('div');
+    item.className = 'comment-item';
+    item.innerHTML = `
+      <div class="comment-author">👤 ${escapeHtml(comment.author_nickname)}</div>
+      <div class="comment-content">${escapeHtml(comment.content)}</div>
+      <div class="comment-time">刚刚</div>
+    `;
+    list.appendChild(item);
+    input.value = '';
+    showToast('评论成功 ✅', 'success');
+  } catch {}
+  btn.disabled = false;
+}
+
+function backToList() {
+  document.getElementById('mainView').style.display = 'block';
+  document.getElementById('detailView').style.display = 'none';
+  document.getElementById('fabBtn').style.display = 'flex';
+  currentPostId = null;
+}
+
+// ============ Create Post ============
+function openCreateModal() {
+  document.getElementById('createModal').classList.add('show');
+  document.getElementById('postTitle').focus();
+}
+function closeCreateModal() {
+  document.getElementById('createModal').classList.remove('show');
+  document.getElementById('postTitle').value = '';
+  document.getElementById('postContent').value = '';
+  document.getElementById('postTags').value = '';
+}
+
+async function submitPost() {
+  const title = document.getElementById('postTitle').value.trim();
+  const content = document.getElementById('postContent').value.trim();
+  const tags = document.getElementById('postTags').value.trim();
+
+  if (!title) { showToast('请输入标题', 'error'); return; }
+  if (!content) { showToast('请输入内容', 'error'); return; }
+
+  const btn = document.getElementById('submitPostBtn');
+  btn.disabled = true;
+  btn.textContent = '发布中...';
+
+  try {
+    await api('/api/posts', {
+      method: 'POST',
+      body: JSON.stringify({ title, content, tags }),
+    });
+    showToast('发布成功！🎉', 'success');
+    closeCreateModal();
+    currentPage = 1;
+    hasMore = true;
+    loadPosts(true);
+    loadStats();
+    loadTags();
+  } catch {}
+  btn.disabled = false;
+  btn.textContent = '✨ 发布成功经验';
+}
+
+// ============ Scroll to Load More ============
+let scrollTimeout;
+window.addEventListener('scroll', () => {
+  clearTimeout(scrollTimeout);
+  scrollTimeout = setTimeout(() => {
+    if (document.getElementById('detailView').style.display !== 'none') return;
+    if (isLoading || !hasMore) return;
+
+    const scrollBottom = window.innerHeight + window.scrollY;
+    const docHeight = document.documentElement.scrollHeight;
+
+    if (scrollBottom >= docHeight - 300) {
+      loadPosts(false);
+    }
+  }, 200);
+});
+
+// ============ Search ============
+let searchTimeout;
+document.getElementById('searchInput').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    currentSearch = e.target.value.trim();
+    currentPage = 1;
+    hasMore = true;
+    loadPosts(true);
+  }, 400);
+});
+
+// ============ Tabs ============
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentSort = tab.dataset.sort;
+    currentPage = 1;
+    hasMore = true;
+    loadPosts(true);
+  });
+});
+
+// ============ Helpers ============
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+function getTimeAgo(isoStr) {
+  if (!isoStr) return '';
+  const now = new Date();
+  const date = new Date(isoStr);
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return `${Math.floor(diff/60)} 分钟前`;
+  if (diff < 86400) return `${Math.floor(diff/3600)} 小时前`;
+  if (diff < 2592000) return `${Math.floor(diff/86400)} 天前`;
+  return date.toLocaleDateString('zh-CN');
+}
+
+// ============ Init ============
+async function init() {
+  document.getElementById('detailView').style.display = 'none';
+  await Promise.all([loadStats(), loadTags(), loadPosts(true)]);
+}
+
+// Register Service Worker
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// Close modal on overlay click
+document.getElementById('createModal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('createModal')) closeCreateModal();
+});
+
+// Enter key to submit comment
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && document.activeElement?.id === 'commentInput') {
+    const btn = document.activeElement.nextElementSibling;
+    if (btn) btn.click();
+  }
+  if (e.key === 'Escape') {
+    if (document.getElementById('createModal').classList.contains('show')) {
+      closeCreateModal();
+    }
+  }
+});
+
+init();
+</script>
+</body>
+</html>
